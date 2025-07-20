@@ -1,134 +1,235 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { Plugin } from "obsidian";
 
-// Remember to rename these classes and interfaces!
+//@ts-ignore
+import ace from "ace-builds/src-noconflict/ace";
+import "ace-builds/src-noconflict/mode-javascript";
+import "ace-builds/src-noconflict/theme-chrome";
+import "ace-builds/src-noconflict/ext-language_tools";
+import * as beautify from "js-beautify";
 
-interface MyPluginSettings {
-	mySetting: string;
-}
+import { generateId } from "utils/common";
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
-}
+const getHeight = (source: string, lineHeight = 20) => {
+  const newLines = Array.from(source.matchAll(/\n/g)).length;
+  return newLines * lineHeight + "px";
+};
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+const createEditorDiv = (id: string) => {
+  const editor = document.createElement("div");
+  editor.id = id;
+  editor.style.width = "100%";
+  editor.style.minHeight = "100px";
+  editor.style.maxHeight = "700px";
+  return editor;
+};
+const initAce = (source: string, id: string) => {
+  const aceEditor = ace.edit(id);
+  aceEditor.setTheme("ace/theme/chrome");
+  aceEditor.session.setMode("ace/mode/javascript");
+  aceEditor.setValue(source, -1);
+  aceEditor.setOptions({
+    fontSize: "14px",
+    readOnly: false,
+    enableBasicAutocompletion: true,
+    enableLiveAutocompletion: true,
+    enableSnippets: true,
+  });
 
-	async onload() {
-		await this.loadSettings();
+  return aceEditor;
+};
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+export default class P5Editor extends Plugin {
+  async onload() {
+    this.registerMarkdownCodeBlockProcessor(
+      "p5",
+      async (source, el, ctx) => {
+        if (!(window as any).p5) {
+          await new Promise((resolve) => {
+            const script = document.createElement("script");
+            script.src = `${this.app.vault.adapter.getResourcePath(`${this.manifest.dir}/assets/p5.min.js`)}`;
+            script.onload = resolve;
+            document.head.appendChild(script);
+          });
+        }
+        const editorId = `ace-editor-${generateId()}`;
+        const outputId = `output-${editorId}`;
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+        const editor = createEditorDiv(editorId);
+        editor.style.height = getHeight(source);
+        el.appendChild(editor);
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+        const outputEl = document.createElement("p");
+        outputEl.id = outputId;
+        outputEl.style.fontFamily = "monospace";
+        outputEl.style.color = "gray";
+        outputEl.style.margin = "0";
+        el.appendChild(outputEl);
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-			}
-		});
+        setTimeout(() => {
+          const aceEditor = initAce(source, editorId);
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+          const saveCodeToBlock = async () => {
+            const file = this.app.workspace.getActiveFile();
+            if (!file) return;
+            if (!ctx) return;
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
+            const blockElement = (ctx as any).containerEl;
+            const codeBlocks = Array.from(
+              blockElement.querySelectorAll(".block-language-p5"),
+            );
+            const index = codeBlocks.indexOf((ctx as any).el);
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-	}
+            const content = await this.app.vault.read(file);
+            const blocks = content.match(/```p5[\s\S]*?```/g);
 
-	onunload() {
+            if (blocks && index >= 0) {
+              const newContent = content.replace(
+                blocks[index],
+                `\`\`\`p5\n${aceEditor.getValue()}\n\`\`\``,
+              );
+              await this.app.vault.modify(file, newContent);
+            }
+          };
 
-	}
+          const frameId = "sketchFrame-" + editorId;
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
+          const runCode = async () => {
+            try {
+              const userCode = aceEditor.getValue();
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
+              const htmlContent = `
+<!DOCTYPE html>
+<html>
+  <head>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+    <script>
+      ${userCode}
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
+      if (typeof setup === "function") {
+        const originalSetup = setup;
+        setup = (...args) => {
+          const result = originalSetup(...args);
+          window.parent.postMessage({
+            type: "resize-iframe",
+            id: "${frameId}",
+            height: document.body.scrollHeight
+          }, "*");
+          return result;
+        };
+      }
+    </script>
+  </head>
+  <body style="margin:0; padding:0;"></body>
+</html>
+`;
 
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
+              // Create a Blob URL
+              const blob = new Blob([htmlContent], { type: "text/html" });
+              const blobURL = URL.createObjectURL(blob);
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
+              // Inject into iframe
+              outputEl.innerHTML = `
+  <iframe width="100%" height="0px" id="${frameId}" src="${blobURL}"></iframe>
+`;
 
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+              //               outputEl.innerHTML = `
+              // <iframe width="100%" height="0px" id="${frameId}" srcdoc='<!DOCTYPE html>
+              // <!DOCTYPE html>
+              // <html>
+              //   <head>
+              //     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+              //     <script>
+              // ${aceEditor.getValue()}
 
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
+              // if(setup){
+              // const originalSetup = setup;
 
-	display(): void {
-		const {containerEl} = this;
+              // setup = (...args) => {
+              //   const result = originalSetup(...args);
 
-		containerEl.empty();
+              //   window.parent.postMessage({
+              //     type: "resize-iframe",
+              // id: "${frameId}",
+              //     height: document.body.scrollHeight
+              //   }, "*");
 
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
-	}
+              //   return result; // return the p5 canvas element as normal
+              // };
+
+              // }
+              //     </script>
+
+              //   </head>
+              //   <body style="margin:0; padding: 0"></body>
+              // </html>
+              // '></iframe>
+              // `;
+
+              console.log("blegh");
+              if (!window.__resizeIframeListenerAdded__) {
+                window.addEventListener("message", (e) => {
+                  if (
+                    e.data?.type === "resize-iframe" &&
+                    e.data.id
+                  ) {
+                    const iframe = document.getElementById(
+                      e.data.id,
+                    );
+                    if (iframe) {
+                      const height = Math.min(
+                        e.data.height + 5,
+                        600,
+                      );
+                      iframe.style.height = height + "px";
+                    }
+                  }
+                });
+              }
+              window.__resizeIframeListenerAdded__ = true;
+
+              // const sketchFunc = new Function('p', aceEditor.getValue());
+              // new (window as any).p5(sketchFunc, outputEl);
+            } catch (err) {
+              console.log(err);
+              outputEl.textContent =
+                "⚠ " + err.message + err.stack;
+              outputEl.style.color = "red";
+            }
+          };
+
+          runCode();
+
+          const runButton = document.createElement("button");
+          runButton.textContent = "Run";
+          runButton.style.margin = "8px 10px";
+          runButton.onclick = runCode;
+          el.appendChild(runButton);
+
+          const saveButton = document.createElement("button");
+          saveButton.textContent = "Save";
+          saveButton.style.margin = "8px 2px";
+          saveButton.onclick = saveCodeToBlock;
+          el.appendChild(saveButton);
+
+          const formatButton = document.createElement("button");
+          formatButton.textContent = "Format";
+          formatButton.style.margin = "8px 2px";
+          formatButton.onclick = () => {
+            const session = aceEditor.getSession();
+            session.setValue(
+              beautify.js_beautify(session.getValue()),
+            );
+          };
+          el.appendChild(formatButton);
+
+          aceEditor.on("change", () => {
+            const session = aceEditor.getSession();
+            editor.style.height = getHeight(session.getValue());
+          });
+        }, 0);
+      },
+    );
+  }
+
+  onunload() { }
 }
