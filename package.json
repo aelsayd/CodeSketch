@@ -15,6 +15,8 @@
 		"@types/ace": "^0.0.52",
 		"@types/js-beautify": "^1.14.3",
 		"@types/node": "^16.11.6",
+		"@types/react": "^19.1.8",
+		"@types/react-dom": "^19.1.6",
 		"@typescript-eslint/eslint-plugin": "5.29.0",
 		"@typescript-eslint/parser": "5.29.0",
 		"builtin-modules": "3.3.0",
@@ -25,6 +27,9 @@
 	},
 	"dependencies": {
 		"ace-builds": "^1.43.2",
-		"js-beautify": "^1.15.4"
+		"js-beautify": "^1.15.4",
+		"react": "^19.1.0",
+		"react-ace": "^14.0.1",
+		"react-dom": "^19.1.0"
 	}
 }
