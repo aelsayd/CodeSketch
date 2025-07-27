@@ -30,6 +30,7 @@
 		"js-beautify": "^1.15.4",
 		"react": "^19.1.0",
 		"react-ace": "^14.0.1",
-		"react-dom": "^19.1.0"
+		"react-dom": "^19.1.0",
+		"typst": "^0.10.0-8"
 	}
 }

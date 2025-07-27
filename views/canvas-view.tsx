@@ -5,6 +5,7 @@ import { createRoot, Root } from 'react-dom/client';
 
 export const CANVAS_VIEW = 'canvas-view';
 
+
 export const Canvas = ({ code }: { code: string }) => {
   console.log("rendering: ", code)
 
